@@ -13,6 +13,12 @@
 -- Pipelining: Determina si la CPU incluida en la PC simulada presentará (valor "true")
 -- o no (valor "false") una segmentación en su cauce. Naturalmente debería esperarse una
 -- notoria mejora en el rendimiento de un procesador segmentado respecto a uno secuencial.
+-- Forwarding: (TP10, escenario 4c) Determina si la CPU utilizará (valor "true") o no
+-- (valor "false") la técnica de adelantamiento (forwarding) para que una instrucción
+-- aritmético-lógica pueda recibir en la etapa "execute" el dato leído de memoria por una
+-- instrucción "load" previa (lb, lh, lw) directamente desde el registro de segmentación
+-- MEM/WB, sin esperar a que dicho dato sea escrito en el banco de registros en la etapa
+-- "writeback". Sólo tiene efecto si "Pipelining" vale "true".
 -- Cores: Esta funcionalidad aún no se encuentra implementada, por lo que el valor asignado
 -- a este parámetro resulta irrelevante. No obstante, cabe mencionar que aquí se estaría
 -- definiendo la cantidad de núcleos que posee la arquitectura multi-core.
@@ -39,8 +45,9 @@ use std.TEXTIO.all;
 entity usuario is
 	-- Generic declarations of the tested unit
 	generic (
-		ProgName	: STRING := "nop_0.asm";
+		ProgName	: STRING := "fwd_suma.asm";
 		Pipelining	: BOOLEAN := true;
+		Forwarding	: BOOLEAN := true;		-- TP10 (4c)
 		Cores 		: INTEGER := 1);  	
 			
 end usuario;
@@ -52,6 +59,7 @@ architecture USUARIO_ARCHITECTURE of usuario is
 		generic (
 			ProgName		: STRING;
 			Pipelining 		: BOOLEAN;
+			Forwarding		: BOOLEAN;
 			Cores 			: INTEGER);
 		port (
 			DoneCompUser	: out std_logic;
@@ -76,6 +84,7 @@ begin
 		generic map (
 			ProgName 		=> ProgName,
 			Pipelining 		=> Pipelining,
+			Forwarding		=> Forwarding,
 			Cores 			=> Cores
 		)
 		port map ( 
@@ -90,6 +99,8 @@ begin
 
 	BEGIN 
 		ReadyUser <= '0';
+		report "Configuración: segmentación = " & BOOLEAN'image(Pipelining) & ", adelantamiento (forwarding) = " & BOOLEAN'image(Forwarding)
+		severity NOTE;		-- TP10 (4c)
 		WAIT FOR 1 ns;
 		ReadyUser <= '1';
 		WAIT UNTIL rising_edge(DoneCompUser);

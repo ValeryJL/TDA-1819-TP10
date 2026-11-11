@@ -7,6 +7,10 @@
 -- correspondientes tareas. También se incluye la declaración de un tipo de 
 -- datos enumerativo que lista taxativamente todos los valores (estados) 
 -- posibles que puede adoptar la máquina de estados de la CPU.
+-- TP10 (4c): el registro "execute_record" incorpora los campos "fwd1", "fwd2" y
+-- "fwdreg", que la etapa "decode" utiliza para indicarle a la etapa "execute" qué
+-- operandos de una instrucción aritmético-lógica deben ser adelantados (forwarding)
+-- desde el registro de segmentación MEM/WB.
 
 
 LIBRARY IEEE;
@@ -67,6 +71,14 @@ PACKAGE tipos_cpu is
 		op1: std_logic_vector(31 downto 0);
 		op2: std_logic_vector(31 downto 0);
 		address: std_logic_vector(15 downto 0);
+		-- TP10 (4c) - Adelantamiento load -> ALU:
+		-- fwd1/fwd2: '1' si el operando op1/op2 no debe tomarse del banco de registros
+		-- (valor leído en "decode" aún desactualizado) sino adelantarse desde el registro
+		-- de segmentación MEM/WB, es decir, desde el dato leído de memoria por un "load".
+		-- fwdreg: número del registro de uso general cuyo valor se adelanta.
+		fwd1: std_logic;
+		fwd2: std_logic;
+		fwdreg: std_logic_vector(7 downto 0);
 	END RECORD;
 	
 	TYPE memaccess_data IS RECORD

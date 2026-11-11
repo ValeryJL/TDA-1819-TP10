@@ -96,6 +96,30 @@
 -- otras escrituras pendientes para el mismo por parte de instrucciones anteriores a aquélla
 -- que provocó el atasco, determinará la finalización de este último para que todas las etapas
 -- del pipeline afectadas puedan reanudar su ejecución.
+-- Modificaciones del TP10 (escenario 4c, adelantamiento load -> ALU):
+-- Si el parámetro genérico "Forwarding" vale "true", este detector deja de reportar como
+-- atasco RAW la lectura de un registro de uso general cuya única escritura pendiente
+-- corresponde a una instrucción "load" (lb, lh, lw sobre la sección de datos) que en ese
+-- mismo ciclo de reloj se encuentra en la etapa "memory access", siempre que la instrucción
+-- que lo lee sea aritmético-lógica (señal "FwdEnableID" de la etapa "decode"). En ese caso,
+-- en lugar de activar "StallRAW", activa la señal "FwdRAW" para que la etapa "decode" marque
+-- el operando como adelantado: la etapa "execute" lo tomará en el ciclo siguiente del
+-- registro de segmentación MEM/WB. Cuando la dependencia es con un "load" que todavía está
+-- en la etapa "execute" (instrucciones consecutivas), el atasco RAW se produce igualmente,
+-- pero ya no dura hasta el "writeback" del "load": se libera al comenzar el ciclo en el que
+-- el "load" ingresa a "memory access" (proceso "Main", procedimiento "ForwardMA()"). Así, el
+-- atasco se reduce de dos ciclos a uno (instrucciones consecutivas) o de uno a ninguno (con
+-- una instrucción intermedia). Por seguridad, el adelantamiento se inhibe mientras la FPU
+-- tenga operaciones en curso ("EXFPUPending"), ya que éstas pueden provocar atascos
+-- estructurales o WAW que demoren la etapa "execute" de la instrucción dependiente.
+-- Nuevos procedimientos y funciones (TP10):
+-- GetRWrPending(): Devuelve la cantidad de escrituras pendientes de un registro R0-R15.
+-- CanForwardRAW(): Determina si el registro que se está leyendo en la etapa "decode" puede
+-- obtenerse por adelantamiento desde el "load" que se encuentra en "memory access".
+-- ForwardMA(): Se ejecuta al comienzo de cada ciclo de reloj (flanco ascendente de
+-- "EnableMA"). Registra qué registro escribirá el "load" que ingresa a "memory access" y,
+-- si existe un atasco RAW provocado por una instrucción aritmético-lógica justamente por
+-- ese registro, lo finaliza para que dicha instrucción pueda decodificarse en este ciclo.
 
 
 library TDA_1819; 
@@ -115,9 +139,11 @@ USE IEEE.std_logic_1164.all;
 entity raw_waw_detector is
 	
 	generic (
-		Pipelining	: BOOLEAN);
+		Pipelining	: BOOLEAN;
+		Forwarding	: BOOLEAN);		-- TP10 (4c)
 	
 	port ( 
+		FwdRAW				: out	std_logic;		-- TP10 (4c)
 		WbRegDoneWAW		: out 	writeback_record;
 		StallWAWAux			: out 	std_logic;
 		DoneWAW				: inout	std_logic;
@@ -133,7 +159,11 @@ entity raw_waw_detector is
 		EnableIncFPWrPend	: in    std_logic;
 		EnableCheckWAW		: in 	std_logic;
 		EnableDecWrPend		: in    std_logic;
-		EnableDecFPWrPend	: in	std_logic);
+		EnableDecFPWrPend	: in	std_logic;
+		IdRegFwdMA			: in	std_logic_vector(7 downto 0);	-- TP10 (4c)
+		FwdEnableID			: in	std_logic;						-- TP10 (4c)
+		EXFPUPending		: in	std_logic;						-- TP10 (4c)
+		EnableMA			: in	std_logic);						-- TP10 (4c)
 
 end raw_waw_detector;
 
@@ -194,6 +224,13 @@ architecture RAW_WAW_DETECTOR_ARCHITECTURE of raw_waw_detector is
 	SIGNAL F14_WrPending:		UNSIGNED(3 downto 0) := B"0000";
 	SIGNAL F15_WrPending:		UNSIGNED(3 downto 0) := B"0000";
 	SIGNAL FPFLAGS_WrPending:	UNSIGNED(3 downto 0) := B"0000";
+	-- TP10 (4c): registro (codificado como número de registro + 1, igual que el campo
+	-- "mode" de "writeback_record") que escribirá el "load" que se encuentra en la etapa
+	-- "memory access" durante el ciclo actual (0 = ninguno).
+	SIGNAL FwdRegMA:			std_logic_vector(7 downto 0) := "00000000";
+	-- TP10 (4c): '1' si el atasco RAW vigente fue provocado por una instrucción
+	-- aritmético-lógica, es decir, si podría resolverse mediante adelantamiento.
+	SIGNAL StallRAWFwdOK:		std_logic := '0';
 
 	
 begin
@@ -211,9 +248,70 @@ begin
 		WbRegWAW.data.decode <= "ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ";
 	END InitializeWbRegWAW;
 	
+	-- TP10 (4c)
+	IMPURE FUNCTION GetRWrPending (CONSTANT id: IN INTEGER) RETURN UNSIGNED IS
+	BEGIN
+		CASE id IS
+			WHEN ID_R0 => return R0_WrPending;
+			WHEN ID_R1 => return R1_WrPending;
+			WHEN ID_R2 => return R2_WrPending;
+			WHEN ID_R3 => return R3_WrPending;
+			WHEN ID_R4 => return R4_WrPending;
+			WHEN ID_R5 => return R5_WrPending;
+			WHEN ID_R6 => return R6_WrPending;
+			WHEN ID_R7 => return R7_WrPending;
+			WHEN ID_R8 => return R8_WrPending;
+			WHEN ID_R9 => return R9_WrPending;
+			WHEN ID_R10 => return R10_WrPending;
+			WHEN ID_R11 => return R11_WrPending;
+			WHEN ID_R12 => return R12_WrPending;
+			WHEN ID_R13 => return R13_WrPending;
+			WHEN ID_R14 => return R14_WrPending;
+			WHEN ID_R15 => return R15_WrPending;
+			WHEN OTHERS => return B"0000";
+		END CASE;
+	END GetRWrPending;
+	
+	-- TP10 (4c): el registro leído en "decode" puede adelantarse si (1) el adelantamiento
+	-- está habilitado, (2) la instrucción que lo lee es aritmético-lógica, (3) la FPU no
+	-- tiene operaciones en curso, (4) es un registro de uso general R0-R15, (5) lo escribirá
+	-- el "load" que está ahora en "memory access" y (6) ésa es su única escritura pendiente
+	-- (si hubiera más, la última en escribirlo sería una instrucción posterior al "load").
+	IMPURE FUNCTION CanForwardRAW RETURN BOOLEAN IS
+	VARIABLE id: INTEGER;
+	BEGIN
+		if ((not Forwarding) or (FwdEnableID /= '1') or (EXFPUPending = '1')) then
+			return false;
+		end if;
+		id := to_integer(unsigned(IdRegID));
+		if ((id < ID_R0) or (id > ID_R15)) then
+			return false;
+		end if;
+		return ((to_integer(unsigned(FwdRegMA)) = id + 1) and (GetRWrPending(id) = 1));
+	END CanForwardRAW;
+	
+	-- TP10 (4c)
+	PROCEDURE ForwardMA IS
+	VARIABLE regRAW: INTEGER;
+	BEGIN
+		FwdRegMA <= IdRegFwdMA;
+		if ((StallRAW = '1') and (StallRAWFwdOK = '1') and (EXFPUPending /= '1')) then
+			regRAW := to_integer(unsigned(IdRegRAW));
+			if ((regRAW >= ID_R0) and (regRAW <= ID_R15)) then
+				if ((to_integer(unsigned(IdRegFwdMA)) = regRAW + 1) and (GetRWrPending(regRAW) = 1)) then
+					StallRAW <= '0';
+				end if;
+			end if;
+		end if;
+	END ForwardMA;
+	
 	PROCEDURE CheckRAW IS
 	
 	BEGIN
+		FwdRAW <= '0';							-- TP10 (4c)
+		if (CanForwardRAW) then					-- TP10 (4c): se adelanta, no hay atasco
+			FwdRAW <= '1';
+		else
 		CASE to_integer(unsigned(IdRegID)) IS
 			WHEN ID_R0 =>
 				if (R0_WrPending > 0) then
@@ -395,6 +493,8 @@ begin
 			WHEN OTHERS =>
 				NULL;
 		END CASE;
+		StallRAWFwdOK <= FwdEnableID;			-- TP10 (4c)
+		end if;
 	END CheckRAW;
 	
 	PROCEDURE IncWrPending IS
@@ -1032,10 +1132,18 @@ begin
 			StallRAW <= '0';
 			StallWAW <= '0';
 			DoneWAW <= '0';
+			FwdRAW <= '0';						-- TP10 (4c)
 			InitializeWbRegWAW;
 			WAIT FOR 1 ns;
 		end if;
-		WAIT UNTIL ((Pipelining) AND (rising_edge(EnableRegID) OR rising_edge(EnableIncWrPend) OR rising_edge(EnableIncFPWrPend) OR rising_edge(EnableCheckWAW) OR rising_edge(EnableDecWrPend) OR rising_edge(EnableDecFPWrPend)));
+		WAIT UNTIL ((Pipelining) AND (rising_edge(EnableRegID) OR rising_edge(EnableIncWrPend) OR rising_edge(EnableIncFPWrPend) OR rising_edge(EnableCheckWAW) OR rising_edge(EnableDecWrPend) OR rising_edge(EnableDecFPWrPend) OR (Forwarding AND rising_edge(EnableMA))));
+		-- TP10 (4c): comienzo de un nuevo ciclo de reloj (ingreso de una instrucción a la
+		-- etapa "memory access"). Sólo se atiende el adelantamiento; el resto del proceso 
+		-- conserva exactamente el comportamiento original.
+		if (Forwarding and rising_edge(EnableMA)) then
+			ForwardMA;
+		end if;
+		if (rising_edge(EnableRegID) or rising_edge(EnableIncWrPend) or rising_edge(EnableIncFPWrPend) or rising_edge(EnableCheckWAW) or rising_edge(EnableDecWrPend) or rising_edge(EnableDecFPWrPend)) then
 		StallWAW <= '0';
 		DoneWAW <= '0';
 		if (EnableRegID = '1') then
@@ -1060,6 +1168,7 @@ begin
 		if ((EnableDecFPWrPend = '1') and (EnableIncFPWrPend = '0')) then
 			DecFPWrPending;
 		end if;
+		end if;									-- TP10 (4c)
 	END PROCESS Main; 
 	
 	

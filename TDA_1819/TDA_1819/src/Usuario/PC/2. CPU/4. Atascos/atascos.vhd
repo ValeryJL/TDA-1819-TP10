@@ -13,6 +13,13 @@
 -- (Lectura Después de Escritura); y, por último, del banco de registros internos 
 -- intermedios la señal necesaria para analizar dependencias estructurales respecto a
 -- la actualización del banco de registros de propósito general de la CPU.
+-- TP10 (4c): se agrega el parámetro genérico "Forwarding" y las señales necesarias para
+-- que el detector de dependencias de datos implemente el adelantamiento load -> ALU:
+-- "IdRegFwdMA" (registro que escribirá el "load" que ingresa a "memory access", provisto
+-- por el banco de registros internos intermedios), "EnableMA" (comienzo de dicha etapa),
+-- "FwdEnableID" (la instrucción en "decode" es aritmético-lógica), "EXFPUPending" (la FPU
+-- tiene operaciones en curso) y, como salida, "FwdRAW" (el operando leído en "decode" debe
+-- ser adelantado en lugar de provocar un atasco RAW).
 
 
 library TDA_1819;
@@ -35,9 +42,11 @@ use ieee_proposed.float_pkg.all;
 entity atascos is
 	
 	generic (
-		Pipelining	: BOOLEAN);
+		Pipelining	: BOOLEAN;
+		Forwarding	: BOOLEAN);		-- TP10 (4c)
 	
 	port ( 
+		FwdRAW				: out	std_logic;		-- TP10 (4c)
 		StallSTR			: out 	std_logic;
 		WbRegDoneWAW		: out 	writeback_record;
 		StallSTRW			: inout std_logic;
@@ -60,7 +69,11 @@ entity atascos is
 		EnableIncFPWrPend	: in    std_logic;
 		EnableCheckWAW		: in 	std_logic;
 		EnableDecWrPend		: in    std_logic;
-		EnableDecFPWrPend	: in	std_logic);
+		EnableDecFPWrPend	: in	std_logic;
+		IdRegFwdMA			: in	std_logic_vector(7 downto 0);	-- TP10 (4c)
+		FwdEnableID			: in	std_logic;						-- TP10 (4c)
+		EXFPUPending		: in	std_logic;						-- TP10 (4c)
+		EnableMA			: in	std_logic);						-- TP10 (4c)
 
 end atascos;
 
@@ -87,8 +100,10 @@ architecture ATASCOS_ARCHITECTURE of atascos is
 	
 	component raw_waw_detector 
 		generic (
-			Pipelining			: BOOLEAN);
+			Pipelining			: BOOLEAN;
+			Forwarding			: BOOLEAN);
 		port ( 
+			FwdRAW				: out	std_logic;
 			WbRegDoneWAW		: out 	writeback_record;
 			StallWAWAux			: out 	std_logic;
 			DoneWAW				: inout	std_logic;
@@ -104,7 +119,11 @@ architecture ATASCOS_ARCHITECTURE of atascos is
 			EnableIncFPWrPend	: in    std_logic;
 			EnableCheckWAW		: in 	std_logic;
 			EnableDecWrPend		: in    std_logic;
-			EnableDecFPWrPend	: in	std_logic);
+			EnableDecFPWrPend	: in	std_logic;
+			IdRegFwdMA			: in	std_logic_vector(7 downto 0);
+			FwdEnableID			: in	std_logic;
+			EXFPUPending		: in	std_logic;
+			EnableMA			: in	std_logic);
 	end component;
 	
 	
@@ -135,8 +154,10 @@ begin
 	
 	UUT2: raw_waw_detector
 		generic map (
-			Pipelining			=> Pipelining)
+			Pipelining			=> Pipelining,
+			Forwarding			=> Forwarding)
 		port map (
+			FwdRAW				=> FwdRAW,
 			WbRegDoneWAW		=> WbRegDoneWAW,
 			StallWAWAux			=> StallWAWAux,
 			DoneWAW				=> DoneWAW,
@@ -152,7 +173,11 @@ begin
 			EnableIncFPWrPend	=> EnableIncFPWrPend,
 			EnableCheckWAW		=> EnableCheckWAW,
 			EnableDecWrPend		=> EnableDecWrPend,
-			EnableDecFPWrPend	=> EnableDecFPWrPend);
+			EnableDecFPWrPend	=> EnableDecFPWrPend,
+			IdRegFwdMA			=> IdRegFwdMA,
+			FwdEnableID			=> FwdEnableID,
+			EXFPUPending		=> EXFPUPending,
+			EnableMA			=> EnableMA);
 		
 	-- Add your stimulus here ...
 	

@@ -10,6 +10,11 @@
 -- se comunica con la memoria principal para leer o escribir sobre su sección de datos 
 -- o leer sobre su sección de instrucciones y por último envía al banco de pruebas del 
 -- usuario la señal de finalización de la ejecución del programa.
+-- TP10 (4c): se agrega el parámetro genérico "Forwarding" (habilita el adelantamiento
+-- load -> ALU) y se interconectan las nuevas señales del mecanismo: "IdRegFwdMA" (banco de
+-- registros internos intermedios -> detector de atascos), "FwdRAW" (detector -> etapa
+-- "decode"), "FwdEnableID" (etapa "decode" -> detector), "EXFPUPendingFwd" (etapa
+-- "execute" -> detector) y "EnableMA" (administrador de la CPU -> detector).
 
 
 library TDA_1819;
@@ -26,7 +31,8 @@ use std.TEXTIO.all;
 entity cpu is
 	
 	generic (
-		Pipelining	: BOOLEAN); 
+		Pipelining	: BOOLEAN;
+		Forwarding	: BOOLEAN); 		-- TP10 (4c)
 		
 	port (
 		DoneCpuUser				: out std_logic;
@@ -129,6 +135,8 @@ architecture CPU_ARCHITECTURE of cpu is
 			EnableDecWrPend			: out   std_logic;
 			EnableCpuToDataStackMem	: out   std_logic;
 			EnableCpuToInstMem		: out   std_logic;
+			FwdEnableID				: out	std_logic;
+			EXFPUPendingOut			: out	std_logic;
 			IDtoEX					: inout execute_record;
 			IDtoWB					: inout writeback_record;
 			BranchEXALUtoSM			: inout state_branch;
@@ -154,7 +162,8 @@ architecture CPU_ARCHITECTURE of cpu is
 			EnableID				: in    std_logic;
 			EnableEX				: in    std_logic;
 			EnableMA				: in    std_logic;
-			EnableWB				: in    std_logic);
+			EnableWB				: in    std_logic;
+			FwdRAW					: in	std_logic);
 	end component;
 	
 	component pipeline_registros
@@ -162,6 +171,7 @@ architecture CPU_ARCHITECTURE of cpu is
 			RecInMA				: out memaccess_record;
 			RecInWB				: out writeback_record;
 			PipeFP_4			: out std_logic;
+			IdRegFwdMA			: out std_logic_vector(7 downto 0);
 			StallSTRW			: in  std_logic;
 			StallSTR			: in  std_logic;
 			StallWAWAux			: in  std_logic;
@@ -177,8 +187,10 @@ architecture CPU_ARCHITECTURE of cpu is
 	
 	component atascos
 		generic (
-			Pipelining			: BOOLEAN);
+			Pipelining			: BOOLEAN;
+			Forwarding			: BOOLEAN);
 		port (
+			FwdRAW				: out	std_logic;
 			StallSTR			: out 	std_logic;
 			WbRegDoneWAW		: out 	writeback_record;
 			StallSTRW			: inout std_logic;
@@ -201,7 +213,11 @@ architecture CPU_ARCHITECTURE of cpu is
 			EnableIncFPWrPend	: in    std_logic;
 			EnableCheckWAW		: in 	std_logic;
 			EnableDecWrPend		: in    std_logic;
-			EnableDecFPWrPend	: in	std_logic);	
+			EnableDecFPWrPend	: in	std_logic;
+			IdRegFwdMA			: in	std_logic_vector(7 downto 0);
+			FwdEnableID			: in	std_logic;
+			EXFPUPending		: in	std_logic;
+			EnableMA			: in	std_logic);	
 	end component;
 	
 	component cpu_admin
@@ -352,6 +368,10 @@ architecture CPU_ARCHITECTURE of cpu is
 	SIGNAL StopEnd: 			std_logic;
 	SIGNAL CLK: 				std_logic;
 	SIGNAL CLK_HALF: 			std_logic;
+	SIGNAL FwdRAW:				std_logic;							-- TP10 (4c)
+	SIGNAL FwdEnableID:			std_logic;							-- TP10 (4c)
+	SIGNAL EXFPUPendingFwd:		std_logic;							-- TP10 (4c)
+	SIGNAL IdRegFwdMA:			std_logic_vector(7 downto 0);		-- TP10 (4c)
 	
 
 begin
@@ -433,6 +453,8 @@ begin
 			EnableDecWrPend			=> EnableDecWrPend,
 			EnableCpuToDataStackMem	=> EnableCpuToDataStackMem,
 			EnableCpuToInstMem		=> EnableCpuToInstMem,
+			FwdEnableID				=> FwdEnableID,
+			EXFPUPendingOut			=> EXFPUPendingFwd,
 			IDtoEX					=> IDtoEX,
 			IDtoWB					=> IDtoWB,
 			BranchEXALUtoSM			=> BranchEXALUtoSM,
@@ -458,13 +480,15 @@ begin
 			EnableID				=> EnableID,
 			EnableEX				=> EnableEX,
 			EnableMA				=> EnableMA,
-			EnableWB				=> EnableWB);
+			EnableWB				=> EnableWB,
+			FwdRAW					=> FwdRAW);
 
 	UUT3: pipeline_registros
 		port map (
 			RecInMA				=> RecInMA,
 			RecInWB				=> RecInWB,
 			PipeFP_4			=> PipeFP_4,
+			IdRegFwdMA			=> IdRegFwdMA,
 			StallSTRW			=> StallSTRW,
 			StallSTR			=> StallSTR,
 			StallWAWAux			=> StallWAWAux,
@@ -479,8 +503,10 @@ begin
 			
 	UUT4: atascos
 		generic map (
-			Pipelining			=> Pipelining)
+			Pipelining			=> Pipelining,
+			Forwarding			=> Forwarding)
 		port map ( 
+			FwdRAW				=> FwdRAW,
 			StallSTR			=> StallSTR,
 			WbRegDoneWAW		=> WbRegDoneWAW,
 			StallSTRW			=> StallSTRW,
@@ -503,7 +529,11 @@ begin
 			EnableIncFPWrPend	=> EnableIncFPWrPend,
 			EnableCheckWAW		=> EnableCheckWAW,
 			EnableDecWrPend		=> EnableDecWrPend,
-			EnableDecFPWrPend	=> EnableDecFPWrPend);
+			EnableDecFPWrPend	=> EnableDecFPWrPend,
+			IdRegFwdMA			=> IdRegFwdMA,
+			FwdEnableID			=> FwdEnableID,
+			EXFPUPending		=> EXFPUPendingFwd,
+			EnableMA			=> EnableMA);
 		
 	UUT5: cpu_admin
 		generic map (

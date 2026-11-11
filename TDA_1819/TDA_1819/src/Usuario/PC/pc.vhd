@@ -6,6 +6,8 @@
 -- de buses	y memoria principal), cada uno de ellos con sus respectivos puertos de entrada,
 -- salida y entrada/salida. También se comunica con el banco de pruebas del usuario	para
 -- mantener informado a este último sobre el estado actual de la simulación.
+-- TP10 (4c): se agrega el parámetro genérico "Forwarding", que se transmite a la CPU para
+-- habilitar o deshabilitar el adelantamiento load -> ALU.
  
 
 library TDA_1819;
@@ -25,6 +27,7 @@ entity pc is
 	generic (
 		ProgName		: STRING;
 		Pipelining		: BOOLEAN;
+		Forwarding		: BOOLEAN;		-- TP10 (4c)
 		Cores 			: INTEGER); 
 		
 	port (
@@ -61,7 +64,8 @@ architecture PC_ARCHITECTURE of pc is
 	
 	component cpu
 		generic (
-			Pipelining				: BOOLEAN);
+			Pipelining				: BOOLEAN;
+			Forwarding				: BOOLEAN);
 		port (
 			DoneCpuUser				: out std_logic;
 			DataAddrBusCpu			: out std_logic_vector(15 downto 0);
@@ -222,7 +226,8 @@ begin
 			
 	UUT2: cpu 
 		generic map (
-			Pipelining				=> Pipelining)
+			Pipelining				=> Pipelining,
+			Forwarding				=> Forwarding)
 		port map (
 			DoneCpuUser				=> DoneCpuUser,
 			DataAddrBusCpu			=> DataAddrBusCpu,

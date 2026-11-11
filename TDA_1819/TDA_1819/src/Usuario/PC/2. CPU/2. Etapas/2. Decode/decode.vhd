@@ -28,8 +28,19 @@
 -- etapas del pipeline puedan realizar su trabajo sin inconvenientes.
 -- Procedimientos y funciones:
 -- Initialize(): Configura y carga toda la información inicial para las siguientes etapas
--- del pipeline, antes de que la misma sea modificada durante la decodificación de la 
+-- del pipeline, antes de que la misma sea modificada durante la decodificación de la
 -- instrucción: operaciones nulas, operandos y direcciones vacías, etc.
+-- IsALUInst(): (TP10, escenario 4c) Indica si el código de operación corresponde a una
+-- instrucción aritmético-lógica entera que utiliza la ALU en la etapa "execute".
+-- Modificaciones del TP10 (escenario 4c, adelantamiento load -> ALU): antes de decodificar
+-- cada instrucción, esta etapa le informa al detector de atascos RAW (señal "FwdEnableID")
+-- si se trata de una instrucción aritmético-lógica. Luego, cada vez que lee un operando del
+-- banco de registros, consulta la señal "FwdRAW" del detector: si vale '1', el registro leído
+-- tiene pendiente una única escritura, correspondiente a un "load" que se encuentra en este
+-- mismo ciclo en la etapa "memory access", por lo cual el valor leído aún no es el correcto.
+-- En lugar de atascar el cauce, se marca el operando (campos "fwd1"/"fwd2" y "fwdreg" de
+-- "IDtoEX") para que la etapa "execute" lo reemplace por el valor adelantado desde el
+-- registro de segmentación MEM/WB.
 
 
 library TDA_1819;
@@ -70,6 +81,7 @@ entity decode is
 		EnableRegIDSP		: out   std_logic;
 		EnableIncWrPend		: out   std_logic;
 		EnableIncFPWrPend 	: out	std_logic;
+		FwdEnableID			: out	std_logic;		-- TP10 (4c)
 		IDtoEX				: inout execute_record;
 		IDtoWB				: inout writeback_record;
 		StallBrEX			: inout std_logic;
@@ -78,6 +90,7 @@ entity decode is
 		StallWAWAux			: in	std_logic;
 		BranchEXALUtoSM		: in    state_branch;
 		EXFPUPending		: in	std_logic;
+		FwdRAW				: in	std_logic;		-- TP10 (4c)
 		IFtoID				: in    decode_record;
 		DataRegOutID		: in    std_logic_vector(31 downto 0);
 		EnableID			: in    std_logic);
@@ -95,6 +108,23 @@ architecture decode_architecture of decode is
 	SIGNAL CodOp:		std_logic_vector(7 downto 0);
 	SIGNAL StallBrID:	std_logic;
 
+	-- TP10 (4c): devuelve "true" si el código de operación corresponde a una instrucción
+	-- aritmético-lógica entera, es decir, una instrucción que opera sobre registros de uso
+	-- general en la ALU durante la etapa "execute" (tabla 38 del manual del TDA 1819).
+	-- Sólo estas instrucciones pueden recibir un operando adelantado desde un "load".
+	FUNCTION IsALUInst (cod: std_logic_vector(7 downto 0)) RETURN BOOLEAN IS
+	BEGIN
+		CASE cod IS
+			WHEN DADD | DADDI | DADDU | DADDUI | DSUB | DSUBI | DSUBU |
+				 DMUL | DMULU | DDIV | DDIVU | SLT | SLTI |
+				 NEGR | ANDR | ANDI | ORR | ORI | XORR | XORI | XNORR | NOTR |
+				 DSL | DSLI | DSR | DSRI | DSLS | DSLSI | DSRS | DSRSI =>
+				return true;
+			WHEN OTHERS =>
+				return false;
+		END CASE;
+	END IsALUInst;
+
 	
 begin	
 	
@@ -111,7 +141,10 @@ begin
 		IDtoEX.op1 <= "ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ";
 		IDtoEX.op2 <= "ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ";
 		IDtoEX.address <= "ZZZZZZZZZZZZZZZZ";
-			
+		IDtoEX.fwd1 <= '0';				-- TP10 (4c): por defecto, ningún operando
+		IDtoEX.fwd2 <= '0';				-- se adelanta
+		IDtoEX.fwdreg <= "ZZZZZZZZ";
+
 		IDtoMA.mode <= std_logic_vector(to_unsigned(MEM_NULL, IDtoMA.mode'length));
 		IDtoMA.control <= NO_ACCESS_MEM;
 		IDtoMA.datasize <= "ZZZZ";
@@ -147,6 +180,7 @@ begin
 			EnableRegIDSP <= '0';
 			EnableIncWrPend <= '0';
 			EnableIncFPWrPend <= '0';
+			FwdEnableID <= '0';		-- TP10 (4c)
 			DoneID <= '0';
 			StopInit <= '0';
 			Initialize(idAux);
@@ -325,6 +359,14 @@ begin
 		WAIT UNTIL falling_edge(EnableID);
 		Initialize(idAux);
 		IDtoEX.empty <= '0';
+		-- TP10 (4c): se informa al detector de atascos RAW si la instrucción que se está
+		-- decodificando es aritmético-lógica (entera, ejecutada en la ALU). Sólo para
+		-- ellas se permite adelantar el operando leído por un "load" en "memory access".
+		if (IsALUInst(CodOp)) then
+			FwdEnableID <= '1';
+		else
+			FwdEnableID <= '0';
+		end if;
 		CASE CodOp IS
 			WHEN LB =>
 				IDtoMA.mode <= std_logic_vector(to_unsigned(MEM_MEM, IDtoMA.mode'length));
@@ -586,6 +628,10 @@ begin
 				EnableRegID <= '0';
 				WAIT FOR 1 ns; 
 				IDtoEX.op1 <= DataRegOutID(31 downto 0); 
+				if (FwdRAW = '1') then		-- TP10 (4c): operando a adelantar desde MEM/WB
+					IDtoEX.fwd1 <= '1';
+					IDtoEX.fwdreg <= std_logic_vector(to_unsigned(rfAux, IDtoEX.fwdreg'length));
+				end if;
 				if (StallRAW = '0') then
 					IdRegID <= std_logic_vector(to_unsigned(rgAux, IdRegID'length));
 					SizeRegID <= std_logic_vector(to_unsigned(4, SizeRegID'length));
@@ -594,6 +640,10 @@ begin
 					EnableRegID <= '0';
 					WAIT FOR 1 ns;
 					IDtoEX.op2 <= DataRegOutID(31 downto 0);  
+					if (FwdRAW = '1') then		-- TP10 (4c): operando a adelantar desde MEM/WB
+						IDtoEX.fwd2 <= '1';
+						IDtoEX.fwdreg <= std_logic_vector(to_unsigned(rgAux, IDtoEX.fwdreg'length));
+					end if;
 				end if;
 			WHEN DADDI =>
 				IDtoEX.op <= std_logic_vector(to_unsigned(EX_ADD, IDtoEX.op'length));
@@ -613,6 +663,10 @@ begin
 				EnableRegID <= '0';
 				WAIT FOR 1 ns;
 				IDtoEX.op1 <= DataRegOutID(31 downto 0);
+				if (FwdRAW = '1') then		-- TP10 (4c): operando a adelantar desde MEM/WB
+					IDtoEX.fwd1 <= '1';
+					IDtoEX.fwdreg <= std_logic_vector(to_unsigned(rfAux, IDtoEX.fwdreg'length));
+				end if;
 			WHEN DADDU =>
 				IDtoEX.op <= std_logic_vector(to_unsigned(EX_ADD, IDtoEX.op'length));
 				IDtoEX.fp <= '0';
@@ -630,6 +684,10 @@ begin
 				EnableRegID <= '0';
 				WAIT FOR 1 ns;
 				IDtoEX.op1 <= DataRegOutID(31 downto 0); 
+				if (FwdRAW = '1') then		-- TP10 (4c): operando a adelantar desde MEM/WB
+					IDtoEX.fwd1 <= '1';
+					IDtoEX.fwdreg <= std_logic_vector(to_unsigned(rfAux, IDtoEX.fwdreg'length));
+				end if;
 				if (StallRAW = '0') then
 					IdRegID <= std_logic_vector(to_unsigned(rgAux, IdRegID'length));
 					SizeRegID <= std_logic_vector(to_unsigned(4, SizeRegID'length));
@@ -638,6 +696,10 @@ begin
 					EnableRegID <= '0';
 					WAIT FOR 1 ns;
 					IDtoEX.op2 <= DataRegOutID(31 downto 0); 
+					if (FwdRAW = '1') then		-- TP10 (4c): operando a adelantar desde MEM/WB
+						IDtoEX.fwd2 <= '1';
+						IDtoEX.fwdreg <= std_logic_vector(to_unsigned(rgAux, IDtoEX.fwdreg'length));
+					end if;
 				end if;
 			WHEN DADDUI =>
 				IDtoEX.op <= std_logic_vector(to_unsigned(EX_ADD, IDtoEX.op'length));
@@ -657,6 +719,10 @@ begin
 				EnableRegID <= '0';
 				WAIT FOR 1 ns;
 				IDtoEX.op1 <= DataRegOutID(31 downto 0);
+				if (FwdRAW = '1') then		-- TP10 (4c): operando a adelantar desde MEM/WB
+					IDtoEX.fwd1 <= '1';
+					IDtoEX.fwdreg <= std_logic_vector(to_unsigned(rfAux, IDtoEX.fwdreg'length));
+				end if;
 			WHEN ADDF =>
 				IDtoEX.op <= std_logic_vector(to_unsigned(EX_ADD, IDtoEX.op'length));
 				IDtoEX.fp <= '1';
@@ -700,6 +766,10 @@ begin
 				EnableRegID <= '0';
 				WAIT FOR 1 ns;
 				IDtoEX.op1 <= DataRegOutID(31 downto 0);
+				if (FwdRAW = '1') then		-- TP10 (4c): operando a adelantar desde MEM/WB
+					IDtoEX.fwd1 <= '1';
+					IDtoEX.fwdreg <= std_logic_vector(to_unsigned(rfAux, IDtoEX.fwdreg'length));
+				end if;
 				if (StallRAW = '0') then
 					IdRegID <= std_logic_vector(to_unsigned(rgAux, IdRegID'length));
 					SizeRegID <= std_logic_vector(to_unsigned(4, SizeRegID'length));
@@ -708,6 +778,10 @@ begin
 					EnableRegID <= '0';
 					WAIT FOR 1 ns;
 					IDtoEX.op2 <= DataRegOutID(31 downto 0); 
+					if (FwdRAW = '1') then		-- TP10 (4c): operando a adelantar desde MEM/WB
+						IDtoEX.fwd2 <= '1';
+						IDtoEX.fwdreg <= std_logic_vector(to_unsigned(rgAux, IDtoEX.fwdreg'length));
+					end if;
 				end if;
 			WHEN DSUBI =>
 				IDtoEX.op <= std_logic_vector(to_unsigned(EX_SUB, IDtoEX.op'length));
@@ -727,6 +801,10 @@ begin
 				EnableRegID <= '0';
 				WAIT FOR 1 ns;
 				IDtoEX.op1 <= DataRegOutID(31 downto 0);
+				if (FwdRAW = '1') then		-- TP10 (4c): operando a adelantar desde MEM/WB
+					IDtoEX.fwd1 <= '1';
+					IDtoEX.fwdreg <= std_logic_vector(to_unsigned(rfAux, IDtoEX.fwdreg'length));
+				end if;
 			WHEN DSUBU =>
 				IDtoEX.op <= std_logic_vector(to_unsigned(EX_SUB, IDtoEX.op'length));
 				IDtoEX.fp <= '0';
@@ -744,6 +822,10 @@ begin
 				EnableRegID <= '0';
 				WAIT FOR 1 ns;
 				IDtoEX.op1 <= DataRegOutID(31 downto 0);
+				if (FwdRAW = '1') then		-- TP10 (4c): operando a adelantar desde MEM/WB
+					IDtoEX.fwd1 <= '1';
+					IDtoEX.fwdreg <= std_logic_vector(to_unsigned(rfAux, IDtoEX.fwdreg'length));
+				end if;
 				if (StallRAW = '0') then
 					IdRegID <= std_logic_vector(to_unsigned(rgAux, IdRegID'length));
 					SizeRegID <= std_logic_vector(to_unsigned(4, SizeRegID'length));
@@ -752,6 +834,10 @@ begin
 					EnableRegID <= '0';
 					WAIT FOR 1 ns;
 					IDtoEX.op2 <= DataRegOutID(31 downto 0); 	
+					if (FwdRAW = '1') then		-- TP10 (4c): operando a adelantar desde MEM/WB
+						IDtoEX.fwd2 <= '1';
+						IDtoEX.fwdreg <= std_logic_vector(to_unsigned(rgAux, IDtoEX.fwdreg'length));
+					end if;
 				end if;
 			WHEN SUBF =>
 				IDtoEX.op <= std_logic_vector(to_unsigned(EX_SUB, IDtoEX.op'length));
@@ -796,6 +882,10 @@ begin
 				EnableRegID <= '0';
 				WAIT FOR 1 ns;
 				IDtoEX.op1 <= DataRegOutID(31 downto 0);
+				if (FwdRAW = '1') then		-- TP10 (4c): operando a adelantar desde MEM/WB
+					IDtoEX.fwd1 <= '1';
+					IDtoEX.fwdreg <= std_logic_vector(to_unsigned(rfAux, IDtoEX.fwdreg'length));
+				end if;
 				if (StallRAW = '0') then
 					IdRegID <= std_logic_vector(to_unsigned(rgAux, IdRegID'length));
 					SizeRegID <= std_logic_vector(to_unsigned(4, SizeRegID'length));
@@ -804,6 +894,10 @@ begin
 					EnableRegID <= '0';
 					WAIT FOR 1 ns;
 					IDtoEX.op2 <= DataRegOutID(31 downto 0);
+					if (FwdRAW = '1') then		-- TP10 (4c): operando a adelantar desde MEM/WB
+						IDtoEX.fwd2 <= '1';
+						IDtoEX.fwdreg <= std_logic_vector(to_unsigned(rgAux, IDtoEX.fwdreg'length));
+					end if;
 				end if;
 			WHEN DMULU =>
 		  		IDtoEX.op <= std_logic_vector(to_unsigned(EX_MUL, IDtoEX.op'length));
@@ -822,6 +916,10 @@ begin
 				EnableRegID <= '0';
 				WAIT FOR 1 ns;
 				IDtoEX.op1 <= DataRegOutID(31 downto 0);
+				if (FwdRAW = '1') then		-- TP10 (4c): operando a adelantar desde MEM/WB
+					IDtoEX.fwd1 <= '1';
+					IDtoEX.fwdreg <= std_logic_vector(to_unsigned(rfAux, IDtoEX.fwdreg'length));
+				end if;
 				if (StallRAW = '0') then
 					IdRegID <= std_logic_vector(to_unsigned(rgAux, IdRegID'length));
 					SizeRegID <= std_logic_vector(to_unsigned(4, SizeRegID'length));
@@ -830,6 +928,10 @@ begin
 					EnableRegID <= '0';
 					WAIT FOR 1 ns;
 					IDtoEX.op2 <= DataRegOutID(31 downto 0);  
+					if (FwdRAW = '1') then		-- TP10 (4c): operando a adelantar desde MEM/WB
+						IDtoEX.fwd2 <= '1';
+						IDtoEX.fwdreg <= std_logic_vector(to_unsigned(rgAux, IDtoEX.fwdreg'length));
+					end if;
 				end if;
 			WHEN MULF =>
 				IDtoEX.op <= std_logic_vector(to_unsigned(EX_MUL, IDtoEX.op'length));
@@ -874,6 +976,10 @@ begin
 				EnableRegID <= '0';
 				WAIT FOR 1 ns;
 				IDtoEX.op1 <= DataRegOutID(31 downto 0);
+				if (FwdRAW = '1') then		-- TP10 (4c): operando a adelantar desde MEM/WB
+					IDtoEX.fwd1 <= '1';
+					IDtoEX.fwdreg <= std_logic_vector(to_unsigned(rfAux, IDtoEX.fwdreg'length));
+				end if;
 				if (StallRAW = '0') then
 					IdRegID <= std_logic_vector(to_unsigned(rgAux, IdRegID'length));
 					SizeRegID <= std_logic_vector(to_unsigned(4, SizeRegID'length));
@@ -882,6 +988,10 @@ begin
 					EnableRegID <= '0';
 					WAIT FOR 1 ns;
 					IDtoEX.op2 <= DataRegOutID(31 downto 0);   
+					if (FwdRAW = '1') then		-- TP10 (4c): operando a adelantar desde MEM/WB
+						IDtoEX.fwd2 <= '1';
+						IDtoEX.fwdreg <= std_logic_vector(to_unsigned(rgAux, IDtoEX.fwdreg'length));
+					end if;
 				end if;
 			WHEN DDIVU =>
 				IDtoEX.op <= std_logic_vector(to_unsigned(EX_DIV, IDtoEX.op'length));
@@ -900,6 +1010,10 @@ begin
 				EnableRegID <= '0';
 				WAIT FOR 1 ns;
 				IDtoEX.op1 <= DataRegOutID(31 downto 0);
+				if (FwdRAW = '1') then		-- TP10 (4c): operando a adelantar desde MEM/WB
+					IDtoEX.fwd1 <= '1';
+					IDtoEX.fwdreg <= std_logic_vector(to_unsigned(rfAux, IDtoEX.fwdreg'length));
+				end if;
 				if (StallRAW = '0') then
 					IdRegID <= std_logic_vector(to_unsigned(rgAux, IdRegID'length));
 					SizeRegID <= std_logic_vector(to_unsigned(4, SizeRegID'length));
@@ -908,6 +1022,10 @@ begin
 					EnableRegID <= '0';
 					WAIT FOR 1 ns;
 					IDtoEX.op2 <= DataRegOutID(31 downto 0);	
+					if (FwdRAW = '1') then		-- TP10 (4c): operando a adelantar desde MEM/WB
+						IDtoEX.fwd2 <= '1';
+						IDtoEX.fwdreg <= std_logic_vector(to_unsigned(rgAux, IDtoEX.fwdreg'length));
+					end if;
 				end if;
 			WHEN DIVF =>
 				IDtoEX.op <= std_logic_vector(to_unsigned(EX_DIV, IDtoEX.op'length));
@@ -952,6 +1070,10 @@ begin
 				EnableRegID <= '0';
 				WAIT FOR 1 ns;
 				IDtoEX.op1 <= DataRegOutID(31 downto 0);
+				if (FwdRAW = '1') then		-- TP10 (4c): operando a adelantar desde MEM/WB
+					IDtoEX.fwd1 <= '1';
+					IDtoEX.fwdreg <= std_logic_vector(to_unsigned(rfAux, IDtoEX.fwdreg'length));
+				end if;
 				if (StallRAW = '0') then
 					IdRegID <= std_logic_vector(to_unsigned(rgAux, IdRegID'length));
 					SizeRegID <= std_logic_vector(to_unsigned(4, SizeRegID'length));
@@ -960,6 +1082,10 @@ begin
 					EnableRegID <= '0';
 					WAIT FOR 1 ns;
 					IDtoEX.op2 <= DataRegOutID(31 downto 0);
+					if (FwdRAW = '1') then		-- TP10 (4c): operando a adelantar desde MEM/WB
+						IDtoEX.fwd2 <= '1';
+						IDtoEX.fwdreg <= std_logic_vector(to_unsigned(rgAux, IDtoEX.fwdreg'length));
+					end if;
 				end if;
 			WHEN SLTI =>
 				IDtoEX.op <= std_logic_vector(to_unsigned(EX_SLT, IDtoEX.op'length));
@@ -979,6 +1105,10 @@ begin
 				EnableRegID <= '0';
 				WAIT FOR 1 ns;
 				IDtoEX.op1 <= DataRegOutID(31 downto 0);
+				if (FwdRAW = '1') then		-- TP10 (4c): operando a adelantar desde MEM/WB
+					IDtoEX.fwd1 <= '1';
+					IDtoEX.fwdreg <= std_logic_vector(to_unsigned(rfAux, IDtoEX.fwdreg'length));
+				end if;
 			WHEN LTF =>
 				IDtoEX.op <= std_logic_vector(to_unsigned(EX_LTF, IDtoEX.op'length));
 				IDtoEX.fp <= '1';
@@ -1061,6 +1191,10 @@ begin
 				EnableRegID <= '0';
 				WAIT FOR 1 ns;
 				IDtoEX.op1 <= DataRegOutID(31 downto 0);
+				if (FwdRAW = '1') then		-- TP10 (4c): operando a adelantar desde MEM/WB
+					IDtoEX.fwd1 <= '1';
+					IDtoEX.fwdreg <= std_logic_vector(to_unsigned(rfAux, IDtoEX.fwdreg'length));
+				end if;
 			WHEN ANDR =>
 				IDtoEX.op <= std_logic_vector(to_unsigned(EX_AND, IDtoEX.op'length));
 				IDtoEX.fp <= '0';
@@ -1078,6 +1212,10 @@ begin
 				EnableRegID <= '0';
 				WAIT FOR 1 ns;
 				IDtoEX.op1 <= DataRegOutID(31 downto 0); 
+				if (FwdRAW = '1') then		-- TP10 (4c): operando a adelantar desde MEM/WB
+					IDtoEX.fwd1 <= '1';
+					IDtoEX.fwdreg <= std_logic_vector(to_unsigned(rfAux, IDtoEX.fwdreg'length));
+				end if;
 				if (StallRAW = '0') then
 					IdRegID <= std_logic_vector(to_unsigned(rgAux, IdRegID'length));
 					SizeRegID <= std_logic_vector(to_unsigned(4, SizeRegID'length));
@@ -1086,6 +1224,10 @@ begin
 					EnableRegID <= '0';
 					WAIT FOR 1 ns;
 					IDtoEX.op2 <= DataRegOutID(31 downto 0); 
+					if (FwdRAW = '1') then		-- TP10 (4c): operando a adelantar desde MEM/WB
+						IDtoEX.fwd2 <= '1';
+						IDtoEX.fwdreg <= std_logic_vector(to_unsigned(rgAux, IDtoEX.fwdreg'length));
+					end if;
 				end if;
 			WHEN ANDI =>
 				IDtoEX.op <= std_logic_vector(to_unsigned(EX_AND, IDtoEX.op'length));
@@ -1105,6 +1247,10 @@ begin
 				EnableRegID <= '0';
 				WAIT FOR 1 ns;
 				IDtoEX.op1 <= DataRegOutID(31 downto 0); 
+				if (FwdRAW = '1') then		-- TP10 (4c): operando a adelantar desde MEM/WB
+					IDtoEX.fwd1 <= '1';
+					IDtoEX.fwdreg <= std_logic_vector(to_unsigned(rfAux, IDtoEX.fwdreg'length));
+				end if;
 			WHEN ORR =>
 				IDtoEX.op <= std_logic_vector(to_unsigned(EX_OR, IDtoEX.op'length));
 				IDtoEX.fp <= '0';
@@ -1122,6 +1268,10 @@ begin
 				EnableRegID <= '0';
 				WAIT FOR 1 ns;
 				IDtoEX.op1 <= DataRegOutID(31 downto 0); 
+				if (FwdRAW = '1') then		-- TP10 (4c): operando a adelantar desde MEM/WB
+					IDtoEX.fwd1 <= '1';
+					IDtoEX.fwdreg <= std_logic_vector(to_unsigned(rfAux, IDtoEX.fwdreg'length));
+				end if;
 				if (StallRAW = '0') then
 					IdRegID <= std_logic_vector(to_unsigned(rgAux, IdRegID'length));
 					SizeRegID <= std_logic_vector(to_unsigned(4, SizeRegID'length));
@@ -1130,6 +1280,10 @@ begin
 					EnableRegID <= '0';
 					WAIT FOR 1 ns;
 					IDtoEX.op2 <= DataRegOutID(31 downto 0); 
+					if (FwdRAW = '1') then		-- TP10 (4c): operando a adelantar desde MEM/WB
+						IDtoEX.fwd2 <= '1';
+						IDtoEX.fwdreg <= std_logic_vector(to_unsigned(rgAux, IDtoEX.fwdreg'length));
+					end if;
 				end if;
 			WHEN ORI =>
 				IDtoEX.op <= std_logic_vector(to_unsigned(EX_OR, IDtoEX.op'length));
@@ -1149,6 +1303,10 @@ begin
 				EnableRegID <= '0';
 				WAIT FOR 1 ns;
 				IDtoEX.op1 <= DataRegOutID(31 downto 0);
+				if (FwdRAW = '1') then		-- TP10 (4c): operando a adelantar desde MEM/WB
+					IDtoEX.fwd1 <= '1';
+					IDtoEX.fwdreg <= std_logic_vector(to_unsigned(rfAux, IDtoEX.fwdreg'length));
+				end if;
 			WHEN XORR =>
 				IDtoEX.op <= std_logic_vector(to_unsigned(EX_XOR, IDtoEX.op'length));
 				IDtoEX.fp <= '0';
@@ -1166,6 +1324,10 @@ begin
 				EnableRegID <= '0';
 				WAIT FOR 1 ns;
 				IDtoEX.op1 <= DataRegOutID(31 downto 0); 
+				if (FwdRAW = '1') then		-- TP10 (4c): operando a adelantar desde MEM/WB
+					IDtoEX.fwd1 <= '1';
+					IDtoEX.fwdreg <= std_logic_vector(to_unsigned(rfAux, IDtoEX.fwdreg'length));
+				end if;
 				if (StallRAW = '0') then
 					IdRegID <= std_logic_vector(to_unsigned(rgAux, IdRegID'length));
 					SizeRegID <= std_logic_vector(to_unsigned(4, SizeRegID'length));
@@ -1174,6 +1336,10 @@ begin
 					EnableRegID <= '0';
 					WAIT FOR 1 ns;
 					IDtoEX.op2 <= DataRegOutID(31 downto 0); 
+					if (FwdRAW = '1') then		-- TP10 (4c): operando a adelantar desde MEM/WB
+						IDtoEX.fwd2 <= '1';
+						IDtoEX.fwdreg <= std_logic_vector(to_unsigned(rgAux, IDtoEX.fwdreg'length));
+					end if;
 				end if;
 			WHEN XORI =>
 				IDtoEX.op <= std_logic_vector(to_unsigned(EX_XOR, IDtoEX.op'length));
@@ -1193,6 +1359,10 @@ begin
 				EnableRegID <= '0';
 				WAIT FOR 1 ns;
 				IDtoEX.op1 <= DataRegOutID(31 downto 0);
+				if (FwdRAW = '1') then		-- TP10 (4c): operando a adelantar desde MEM/WB
+					IDtoEX.fwd1 <= '1';
+					IDtoEX.fwdreg <= std_logic_vector(to_unsigned(rfAux, IDtoEX.fwdreg'length));
+				end if;
 			WHEN XNORR =>
 				IDtoEX.op <= std_logic_vector(to_unsigned(EX_XNOR, IDtoEX.op'length));
 				IDtoEX.fp <= '0';
@@ -1210,6 +1380,10 @@ begin
 				EnableRegID <= '0';
 				WAIT FOR 1 ns;
 				IDtoEX.op1 <= DataRegOutID(31 downto 0); 
+				if (FwdRAW = '1') then		-- TP10 (4c): operando a adelantar desde MEM/WB
+					IDtoEX.fwd1 <= '1';
+					IDtoEX.fwdreg <= std_logic_vector(to_unsigned(rfAux, IDtoEX.fwdreg'length));
+				end if;
 				if (StallRAW = '0') then
 					IdRegID <= std_logic_vector(to_unsigned(rgAux, IdRegID'length));
 					SizeRegID <= std_logic_vector(to_unsigned(4, SizeRegID'length));
@@ -1218,6 +1392,10 @@ begin
 					EnableRegID <= '0';
 					WAIT FOR 1 ns;
 					IDtoEX.op2 <= DataRegOutID(31 downto 0); 
+					if (FwdRAW = '1') then		-- TP10 (4c): operando a adelantar desde MEM/WB
+						IDtoEX.fwd2 <= '1';
+						IDtoEX.fwdreg <= std_logic_vector(to_unsigned(rgAux, IDtoEX.fwdreg'length));
+					end if;
 				end if;
 			WHEN NOTR =>
 				IDtoEX.op <= std_logic_vector(to_unsigned(EX_NOT, IDtoEX.op'length));
@@ -1235,6 +1413,10 @@ begin
 				EnableRegID <= '0';
 				WAIT FOR 1 ns;
 				IDtoEX.op1 <= DataRegOutID(31 downto 0);
+				if (FwdRAW = '1') then		-- TP10 (4c): operando a adelantar desde MEM/WB
+					IDtoEX.fwd1 <= '1';
+					IDtoEX.fwdreg <= std_logic_vector(to_unsigned(rfAux, IDtoEX.fwdreg'length));
+				end if;
 			WHEN DSL =>
 				IDtoEX.op <= std_logic_vector(to_unsigned(EX_DSL, IDtoEX.op'length));
 				IDtoEX.fp <= '0';
@@ -1252,6 +1434,10 @@ begin
 				EnableRegID <= '0';
 				WAIT FOR 1 ns;
 				IDtoEX.op1 <= DataRegOutID(31 downto 0); 
+				if (FwdRAW = '1') then		-- TP10 (4c): operando a adelantar desde MEM/WB
+					IDtoEX.fwd1 <= '1';
+					IDtoEX.fwdreg <= std_logic_vector(to_unsigned(rfAux, IDtoEX.fwdreg'length));
+				end if;
 				if (StallRAW = '0') then
 					IdRegID <= std_logic_vector(to_unsigned(rgAux, IdRegID'length));
 					SizeRegID <= std_logic_vector(to_unsigned(4, SizeRegID'length));
@@ -1260,6 +1446,10 @@ begin
 					EnableRegID <= '0';
 					WAIT FOR 1 ns;
 					IDtoEX.op2 <= DataRegOutID(31 downto 0);  
+					if (FwdRAW = '1') then		-- TP10 (4c): operando a adelantar desde MEM/WB
+						IDtoEX.fwd2 <= '1';
+						IDtoEX.fwdreg <= std_logic_vector(to_unsigned(rgAux, IDtoEX.fwdreg'length));
+					end if;
 				end if;
 			WHEN DSLI =>
 				IDtoEX.op <= std_logic_vector(to_unsigned(EX_DSL, IDtoEX.op'length));
@@ -1279,6 +1469,10 @@ begin
 				EnableRegID <= '0';
 				WAIT FOR 1 ns;
 				IDtoEX.op1 <= DataRegOutID(31 downto 0);
+				if (FwdRAW = '1') then		-- TP10 (4c): operando a adelantar desde MEM/WB
+					IDtoEX.fwd1 <= '1';
+					IDtoEX.fwdreg <= std_logic_vector(to_unsigned(rfAux, IDtoEX.fwdreg'length));
+				end if;
 			WHEN DSR =>
 				IDtoEX.op <= std_logic_vector(to_unsigned(EX_DSR, IDtoEX.op'length));
 				IDtoEX.fp <= '0';
@@ -1296,6 +1490,10 @@ begin
 				EnableRegID <= '0';
 				WAIT FOR 1 ns;
 				IDtoEX.op1 <= DataRegOutID(31 downto 0); 
+				if (FwdRAW = '1') then		-- TP10 (4c): operando a adelantar desde MEM/WB
+					IDtoEX.fwd1 <= '1';
+					IDtoEX.fwdreg <= std_logic_vector(to_unsigned(rfAux, IDtoEX.fwdreg'length));
+				end if;
 				if (StallRAW = '0') then
 					IdRegID <= std_logic_vector(to_unsigned(rgAux, IdRegID'length));
 					SizeRegID <= std_logic_vector(to_unsigned(4, SizeRegID'length));
@@ -1304,6 +1502,10 @@ begin
 					EnableRegID <= '0';
 					WAIT FOR 1 ns;
 					IDtoEX.op2 <= DataRegOutID(31 downto 0);  
+					if (FwdRAW = '1') then		-- TP10 (4c): operando a adelantar desde MEM/WB
+						IDtoEX.fwd2 <= '1';
+						IDtoEX.fwdreg <= std_logic_vector(to_unsigned(rgAux, IDtoEX.fwdreg'length));
+					end if;
 				end if;
 			WHEN DSRI =>
 				IDtoEX.op <= std_logic_vector(to_unsigned(EX_DSR, IDtoEX.op'length));
@@ -1323,6 +1525,10 @@ begin
 				EnableRegID <= '0';
 				WAIT FOR 1 ns;
 				IDtoEX.op1 <= DataRegOutID(31 downto 0);
+				if (FwdRAW = '1') then		-- TP10 (4c): operando a adelantar desde MEM/WB
+					IDtoEX.fwd1 <= '1';
+					IDtoEX.fwdreg <= std_logic_vector(to_unsigned(rfAux, IDtoEX.fwdreg'length));
+				end if;
 			WHEN DSLS =>
 				IDtoEX.op <= std_logic_vector(to_unsigned(EX_DSL, IDtoEX.op'length));
 				IDtoEX.fp <= '0';
@@ -1340,6 +1546,10 @@ begin
 				EnableRegID <= '0';
 				WAIT FOR 1 ns;
 				IDtoEX.op1 <= DataRegOutID(31 downto 0); 
+				if (FwdRAW = '1') then		-- TP10 (4c): operando a adelantar desde MEM/WB
+					IDtoEX.fwd1 <= '1';
+					IDtoEX.fwdreg <= std_logic_vector(to_unsigned(rfAux, IDtoEX.fwdreg'length));
+				end if;
 				if (StallRAW = '0') then
 					IdRegID <= std_logic_vector(to_unsigned(rgAux, IdRegID'length));
 					SizeRegID <= std_logic_vector(to_unsigned(4, SizeRegID'length));
@@ -1348,6 +1558,10 @@ begin
 					EnableRegID <= '0';
 					WAIT FOR 1 ns;
 					IDtoEX.op2 <= DataRegOutID(31 downto 0);  
+					if (FwdRAW = '1') then		-- TP10 (4c): operando a adelantar desde MEM/WB
+						IDtoEX.fwd2 <= '1';
+						IDtoEX.fwdreg <= std_logic_vector(to_unsigned(rgAux, IDtoEX.fwdreg'length));
+					end if;
 				end if;
 			WHEN DSLSI =>
 				IDtoEX.op <= std_logic_vector(to_unsigned(EX_DSL, IDtoEX.op'length));
@@ -1367,6 +1581,10 @@ begin
 				EnableRegID <= '0';
 				WAIT FOR 1 ns;
 				IDtoEX.op1 <= DataRegOutID(31 downto 0);
+				if (FwdRAW = '1') then		-- TP10 (4c): operando a adelantar desde MEM/WB
+					IDtoEX.fwd1 <= '1';
+					IDtoEX.fwdreg <= std_logic_vector(to_unsigned(rfAux, IDtoEX.fwdreg'length));
+				end if;
 			WHEN DSRS =>
 				IDtoEX.op <= std_logic_vector(to_unsigned(EX_DSR, IDtoEX.op'length));
 				IDtoEX.fp <= '0';
@@ -1384,6 +1602,10 @@ begin
 				EnableRegID <= '0';
 				WAIT FOR 1 ns;
 				IDtoEX.op1 <= DataRegOutID(31 downto 0); 
+				if (FwdRAW = '1') then		-- TP10 (4c): operando a adelantar desde MEM/WB
+					IDtoEX.fwd1 <= '1';
+					IDtoEX.fwdreg <= std_logic_vector(to_unsigned(rfAux, IDtoEX.fwdreg'length));
+				end if;
 				if (StallRAW = '0') then
 					IdRegID <= std_logic_vector(to_unsigned(rgAux, IdRegID'length));
 					SizeRegID <= std_logic_vector(to_unsigned(4, SizeRegID'length));
@@ -1392,6 +1614,10 @@ begin
 					EnableRegID <= '0';
 					WAIT FOR 1 ns;
 					IDtoEX.op2 <= DataRegOutID(31 downto 0);  
+					if (FwdRAW = '1') then		-- TP10 (4c): operando a adelantar desde MEM/WB
+						IDtoEX.fwd2 <= '1';
+						IDtoEX.fwdreg <= std_logic_vector(to_unsigned(rgAux, IDtoEX.fwdreg'length));
+					end if;
 				end if;
 			WHEN DSRSI =>
 				IDtoEX.op <= std_logic_vector(to_unsigned(EX_DSR, IDtoEX.op'length));
@@ -1411,6 +1637,10 @@ begin
 				EnableRegID <= '0';
 				WAIT FOR 1 ns;
 				IDtoEX.op1 <= DataRegOutID(31 downto 0);
+				if (FwdRAW = '1') then		-- TP10 (4c): operando a adelantar desde MEM/WB
+					IDtoEX.fwd1 <= '1';
+					IDtoEX.fwdreg <= std_logic_vector(to_unsigned(rfAux, IDtoEX.fwdreg'length));
+				end if;
 			WHEN JMP =>	
 				DataRegInID(31 downto 16) <= "ZZZZZZZZZZZZZZZZ";
 				DataRegInID(15 downto 0) <= IFtoIDLocal.package1(15 downto 0);
@@ -1643,6 +1873,7 @@ begin
 				report "Error: el código de operación de la instrucción no es válido"
 				severity FAILURE;
 		END CASE;
+		FwdEnableID <= '0';		-- TP10 (4c)
 		IFtoIDAnt <= IFtoIDLocal;
 		--IdRegIncWrPend <= IDtoWB.mode;
 		--EnableIncWrPend <= '1';

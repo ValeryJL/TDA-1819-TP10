@@ -87,6 +87,14 @@ begin
 		if (StallRAW = '1') then							  
 			WAIT UNTIL falling_edge(StallRAW);
 			WAIT UNTIL rising_edge(EnableIF);
+			-- TP10 (corrección): si mientras se esperaba este ciclo comenzó un nuevo atasco RAW
+			-- (por ejemplo, por el segundo operando de la misma instrucción), la búsqueda debe
+			-- seguir detenida; de lo contrario se sobrescribe la instrucción ya buscada que aún
+			-- no fue decodificada y ésta nunca llega a ejecutarse.
+			while (StallRAW = '1') loop
+				WAIT UNTIL falling_edge(StallRAW);
+				WAIT UNTIL rising_edge(EnableIF);
+			end loop;
 			--WAIT UNTIL rising_edge(EnableIF);
 			if (StallBrEX = '1') then
 				WAIT UNTIL rising_edge(EnableIF);

@@ -42,10 +42,21 @@
 -- través del banco de registros internos intermedios la información originada en la etapa
 -- "decode" para la misma etapa "writeback", transmitiéndole a esta última su correspondiente
 -- información a fin de que pueda utilizarla para realizar su ejecución.
+-- Modificaciones del TP10 (escenario 4c, adelantamiento load -> ALU): el proceso "InEX",
+-- al transmitir a la etapa "memory access" la información de la instrucción que ingresa
+-- a ella, determina además si dicha instrucción es un "load" cuyo dato leído podrá ser
+-- adelantado: lectura de la sección de datos de la memoria (lb, lh, lw) cuyo destino es
+-- un registro de uso general R0-R15 (se excluyen "lf", cuyo destino es un registro de punto
+-- flotante, y las lecturas de la pila). En ese caso informa el registro destino (codificado
+-- como número de registro + 1) al detector de atascos RAW a través de la nueva salida 
+-- "IdRegFwdMA"; en caso contrario, "IdRegFwdMA" vale 0. El dato leído quedará luego en el
+-- registro MEM/WB ("RecInWB.data.memaccess"), desde donde lo toma la etapa "execute".
 
 
 library TDA_1819;			 
+use TDA_1819.const_buses.all;		-- TP10 (4c)
 use TDA_1819.const_cpu.all;
+use TDA_1819.const_registros.all;	-- TP10 (4c)
 use TDA_1819.tipos_cpu.all;
 
 
@@ -64,6 +75,7 @@ entity pipeline_registros is
 		RecInMA			: out memaccess_record;
 		RecInWB			: out writeback_record;
 		PipeFP_4		: out std_logic;
+		IdRegFwdMA		: out std_logic_vector(7 downto 0);		-- TP10 (4c)
 		StallSTRW		: in  std_logic;
 		StallSTR		: in  std_logic;
 		StallWAWAux		: in  std_logic;
@@ -152,6 +164,7 @@ begin
 		if (First) then
 			First := false;
 			PipeFP_4 <= 'Z';
+			IdRegFwdMA <= "00000000";		-- TP10 (4c)
 		end if;
 		WAIT UNTIL falling_edge(EnablePDA_EX);
 		MARecords(0) <= MARecords(1);
@@ -193,6 +206,17 @@ begin
 			RecInMA.mode <= std_logic_vector(to_unsigned(MEM_NULL, RecInMA.mode'length));
 			--report "Error al cargar los datos para ejecutar la etapa de acceso a memoria"
 			--severity FAILURE;
+		end if;
+		-- TP10 (4c): ¿la instrucción que ingresa a "memory access" es un "load" adelantable?
+		if ((StallSTRW = '0') and (StallWAWAux = '0') and (PipeFP(1) /= '1') and (PipeNO(1) = '1') and
+			(MARecords(0).mode = std_logic_vector(to_unsigned(MEM_MEM, MARecords(0).mode'length))) and
+			(MARecords(0).control = READ_DATA_MEM) and
+			(WBRecords(1).source = std_logic_vector(to_unsigned(WB_MEM, WBRecords(1).source'length))) and
+			(to_integer(unsigned(WBRecords(1).mode)) >= ID_R0 + 1) and
+			(to_integer(unsigned(WBRecords(1).mode)) <= ID_R15 + 1)) then
+			IdRegFwdMA <= WBRecords(1).mode;
+		else
+			IdRegFwdMA <= "00000000";
 		end if;
 	END PROCESS InEX;
 	

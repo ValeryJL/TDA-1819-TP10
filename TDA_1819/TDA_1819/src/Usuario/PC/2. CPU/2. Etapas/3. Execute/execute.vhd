@@ -35,6 +35,15 @@
 -- señales internas auxiliares encargadas de almacenar información recibida de la etapa de
 -- decodificación a fin de que no ocurra ningún inconveniente durante la ejecución de la
 -- simulación por intentar leer señales que aún no hayan sido previamente inicializadas.
+-- ForwardOperands(): (TP10, escenario 4c) Implementa el multiplexor de adelantamiento a la
+-- entrada de la ALU. Si la etapa "decode" marcó alguno de los operandos como adelantado
+-- (campos "fwd1"/"fwd2"), lo reemplaza por el dato leído de memoria por el "load" que se
+-- encuentra en el registro de segmentación MEM/WB ("RecInWB.data.memaccess"), extendido con
+-- ceros a 32 bits tal como lo escribiría luego la etapa "writeback" en el banco de registros.
+-- Antes de hacerlo verifica que dicho registro contenga efectivamente al "load" esperado 
+-- (fuente WB_MEM y registro destino igual a "fwdreg") e informa por consola cada
+-- adelantamiento realizado.
+-- FwdHex(): (TP10) Convierte un vector de bits a una cadena hexadecimal para los mensajes.
 
 
 library TDA_1819;
@@ -76,6 +85,7 @@ entity execute is
 		IDtoEX				: in  	execute_record;
 		DataRegOutEXALU		: in  	std_logic_vector(31 downto 0);
 		DataRegOutEXFPU		: in  	std_logic_vector(31 downto 0);
+		RecInWB				: in	writeback_record;		-- TP10 (4c): registro MEM/WB
 		EnableEX			: in  	std_logic);
 
 end execute;
@@ -126,6 +136,23 @@ architecture EXECUTE_ARCHITECTURE of execute is
 	SIGNAL IDtoEXFPU: 			execute_record;	
 	SIGNAL DoneEXALU:			std_logic;
 	SIGNAL DoneEXFPU:			std_logic;
+	
+	-- TP10 (4c)
+	FUNCTION FwdHex (v: std_logic_vector(31 downto 0)) RETURN STRING IS
+	CONSTANT digitos: STRING(1 to 16) := "0123456789ABCDEF";
+	VARIABLE cadena: STRING(1 to 8);
+	VARIABLE nibble: std_logic_vector(3 downto 0);
+	BEGIN
+		for i in 0 to 7 loop
+			nibble := v(31-4*i downto 28-4*i);
+			if (Is_X(nibble)) then
+				cadena(i+1) := 'X';
+			else
+				cadena(i+1) := digitos(to_integer(unsigned(nibble))+1);
+			end if;
+		end loop;
+		return cadena;
+	END FwdHex;
 	
 	
 begin
@@ -205,6 +232,37 @@ begin
 	VARIABLE wasSTR: BOOLEAN := false;
 	VARIABLE wasSTRW: BOOLEAN := false;
 	VARIABLE varEXFPUPending: BOOLEAN := false;
+	VARIABLE recEX: execute_record;			-- TP10 (4c)
+	
+	-- TP10 (4c): multiplexor de adelantamiento MEM/WB -> entrada de la ALU
+	PROCEDURE ForwardOperands (VARIABLE rec: INOUT execute_record) IS
+	VARIABLE dato: std_logic_vector(31 downto 0);
+	VARIABLE nbits: INTEGER;
+	BEGIN
+		if ((rec.fwd1 = '1') or (rec.fwd2 = '1')) then
+			if ((RecInWB.source = std_logic_vector(to_unsigned(WB_MEM, RecInWB.source'length))) and
+				(RecInWB.mode = std_logic_vector(unsigned(rec.fwdreg) + 1))) then
+				dato := (others => '0');
+				nbits := to_integer(unsigned(RecInWB.datasize))*8;
+				for i in nbits-1 downto 0 loop
+					dato(i) := RecInWB.data.memaccess(i);
+				end loop;
+				if (rec.fwd1 = '1') then
+					rec.op1 := dato;
+					report "Adelantamiento (MEM/WB -> EX): R" & integer'image(to_integer(unsigned(rec.fwdreg))) & " = 0x" & FwdHex(dato) & " ingresa a la ALU como primer operando"
+					severity NOTE;
+				end if;
+				if (rec.fwd2 = '1') then
+					rec.op2 := dato;
+					report "Adelantamiento (MEM/WB -> EX): R" & integer'image(to_integer(unsigned(rec.fwdreg))) & " = 0x" & FwdHex(dato) & " ingresa a la ALU como segundo operando"
+					severity NOTE;
+				end if;
+			else
+				report "Error: el dato a adelantar no se encuentra en el registro de segmentación MEM/WB"
+				severity ERROR;
+			end if;
+		end if;
+	END ForwardOperands;
 	
 	BEGIN 
 		if (First) then
@@ -265,7 +323,9 @@ begin
 			if (not wasSTRW) then
 				if ((Fp = '0') or (Fp = 'Z')) then
 					if (StallSTR = '0') then
-						IDtoEXALU <= IDtoEX;
+						recEX := IDtoEX;				-- TP10 (4c): se aplica el
+						ForwardOperands(recEX);			-- adelantamiento, si corresponde
+						IDtoEXALU <= recEX;
 						EnableEXALU <= '0';
 						--WAIT FOR 1 ns;
 					end if;

@@ -11,6 +11,11 @@
 -- como la "memory access" acceden frecuentemente a la memoria de instrucciones y datos 
 -- respectivamente mientras se ejecutan, mientras que un fenómeno similar ocurre en la etapa
 -- "writeback" con respecto al banco de registros del procesador.
+-- TP10 (4c): se agregan las conexiones del adelantamiento load -> ALU: la etapa "decode"
+-- recibe del detector de atascos la señal "FwdRAW" y le envía "FwdEnableID"; la etapa 
+-- "execute" recibe el registro de segmentación MEM/WB ("RecInWB") para tomar de él el dato
+-- adelantado; y la señal "EXFPUPending" (FPU con operaciones en curso) se exporta hacia el
+-- detector de atascos a través de la nueva salida "EXFPUPendingOut".
 
 
 library TDA_1819;
@@ -79,6 +84,8 @@ entity etapas is
 		EnableDecWrPend			: out   std_logic;
 		EnableCpuToDataStackMem	: out   std_logic;
 		EnableCpuToInstMem		: out   std_logic;
+		FwdEnableID				: out	std_logic;		-- TP10 (4c)
+		EXFPUPendingOut			: out	std_logic;		-- TP10 (4c)
 		IDtoEX					: inout execute_record;
 		IDtoWB					: inout writeback_record;
 		BranchEXALUtoSM			: inout state_branch;
@@ -104,7 +111,8 @@ entity etapas is
 		EnableID				: in    std_logic;
 		EnableEX				: in    std_logic;
 		EnableMA				: in    std_logic;
-		EnableWB				: in    std_logic);	
+		EnableWB				: in    std_logic;
+		FwdRAW					: in	std_logic);		-- TP10 (4c)
 			
 end etapas;
 
@@ -153,6 +161,7 @@ architecture ETAPAS_ARCHITECTURE of etapas is
 			EnableRegIDSP		: out   std_logic;
 			EnableIncWrPend		: out   std_logic;
 			EnableIncFPWrPend	: out   std_logic;
+			FwdEnableID			: out	std_logic;
 			IDtoEX				: inout execute_record;
 			IDtoWB				: inout writeback_record;
 			StallBrEX			: inout std_logic;
@@ -161,6 +170,7 @@ architecture ETAPAS_ARCHITECTURE of etapas is
 			StallWAWAux			: in	std_logic;
 			BranchEXALUtoSM		: in    state_branch;
 			EXFPUPending		: in	std_logic;
+			FwdRAW				: in	std_logic;
 			IFtoID				: in    decode_record;
 			DataRegOutID		: in    std_logic_vector(31 downto 0);
 			EnableID			: in    std_logic);
@@ -187,6 +197,7 @@ architecture ETAPAS_ARCHITECTURE of etapas is
 			IDtoEX				: in  	execute_record;
 			DataRegOutEXALU		: in  	std_logic_vector(31 downto 0);
 			DataRegOutEXFPU		: in  	std_logic_vector(31 downto 0);
+			RecInWB				: in	writeback_record;
 			EnableEX			: in  	std_logic);
 	end component;
 	
@@ -282,6 +293,7 @@ begin
 			EnableRegIDSP		=> EnableRegIDSP,
 			EnableIncWrPend		=> EnableIncWrPend,
 			EnableIncFPWrPend	=> EnableIncFPWrPend,
+			FwdEnableID			=> FwdEnableID,
 			IDtoEX				=> IDtoEX,
 			IDtoWB				=> IDtoWB,
 			StallBrEX			=> StallBrEX,
@@ -290,6 +302,7 @@ begin
 			StallWAWAux			=> StallWAWAux,
 			BranchEXALUtoSM		=> BranchEXALUtoSM, 
 			EXFPUPending		=> EXFPUPending,
+			FwdRAW				=> FwdRAW,
 			IFtoID				=> IFtoID,
 			DataRegOutID		=> DataRegOutID,
 			EnableID			=> EnableID);
@@ -315,6 +328,7 @@ begin
 			IDtoEX				=> IDtoEX,
 			DataRegOutEXALU		=> DataRegOutEXALU,
 			DataRegOutEXFPU		=> DataRegOutEXFPU,
+			RecInWB				=> RecInWB,
 			EnableEX			=> EnableEX);
 	
 	UUT4: memory_access
@@ -349,6 +363,8 @@ begin
 			EnableWB			=> EnableWB);
 	
 	-- Add your stimulus here ...
+	
+	EXFPUPendingOut <= EXFPUPending;		-- TP10 (4c)
 
 
 end ETAPAS_ARCHITECTURE;

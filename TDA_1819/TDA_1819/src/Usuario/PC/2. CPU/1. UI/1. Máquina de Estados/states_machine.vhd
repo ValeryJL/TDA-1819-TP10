@@ -368,6 +368,11 @@ begin
 						--InstStatesExec(i+2).state <= E;
 					--WAIT FOR 2 ns;
 					WAIT UNTIL falling_edge(EnableSM);
+					-- TP10 (corrección): se espera a que la etapa "decode" termine de leer los
+					-- operandos (segunda mitad del ciclo) antes de consultar "StallRAW", ya que la
+					-- lectura del segundo operando puede provocar un nuevo atasco RAW para la misma
+					-- instrucción, en cuyo caso ésta debe permanecer en el estado D_RAW.
+					WAIT FOR 15 ns;
 					if (StallRAW = '0') then 
 						if (StallSTR = '1') then
 							InstStatesExec(i).state <= D_STR;
