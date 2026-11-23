@@ -17,16 +17,14 @@ Entrega: viernes 27 de noviembre de 2026, 11:59:59, por mensajería de IDEAS.
 Qué hay en cada carpeta
 -----------------------
 1_Informe/
-    Informe_TP10_Grupo11.docx   El informe en Word (punto 4a de la consigna).
-    Informe_TP10_Grupo11.pdf    El mismo informe en PDF, por si piden ese formato.
+    Informe_TP10_Grupo11.pdf    El informe final en PDF (punto 4a de la consigna).
+    Informe_TP10_Grupo11.typ    Fuente editable en Typst (junto con img/).
 
 2_Presentacion/
-    Presentacion_TP10_Grupo11.pptx   Las 16 diapositivas para la defensa (punto 4d),
-                                     con las notas del orador de cada una.
-    Presentacion_TP10_Grupo11.pdf    La misma presentación en PDF.
-    En el .pptx cada diapositiva es una imagen: se ve igual en cualquier
-    computadora, pero el texto no se puede editar ahí. Para cambiar algo, hay que
-    editar la versión en línea (link al final) y volver a exportarla.
+    Presentacion_TP10_Grupo11.pdf   Las 16 diapositivas para la defensa (punto 4d).
+    Presentacion_TP10_Grupo11.typ   Fuente editable en Typst (junto con img/).
+    Guion_Presentacion_TP10_Grupo11.pdf   Guion oral dividido en 6 bloques + preguntas.
+    Guion_Presentacion_TP10_Grupo11.typ   Fuente editable en Typst (completar nombres).
 
 3_Archivos_para_entregar/
     src/        Los 12 .vhd modificados y los 3 programas .asm (puntos 4b y 4c),
