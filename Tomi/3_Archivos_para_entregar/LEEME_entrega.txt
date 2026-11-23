@@ -1,0 +1,49 @@
+TP10 - Procesador TDA 1819 - Escenario 4c: adelantamiento load -> ALU
+=====================================================================
+
+Contenido
+---------
+src/                Archivos modificados y nuevos, en la MISMA ruta que dentro de
+                    My_Designs/TDA_1819/TDA_1819/src/ del proyecto original.
+                    Copiarlos encima de los originales (no hay archivos .vhd nuevos,
+                    el orden de compilacion no cambia).
+extras/             bug_doble_raw.asm: prueba minima del bug de fetch (seccion 5
+                    del informe). Para usarla, copiarla a src/Assembler/.
+
+Archivos VHDL modificados (12)
+------------------------------
+Adelantamiento (10):
+  src/Usuario/usuario.vhd                                          generico Forwarding
+  src/Usuario/PC/pc.vhd
+  src/Usuario/PC/2. CPU/cpu.vhd
+  src/Packages/tipos_cpu.vhd                                       campos fwd1, fwd2, fwdreg
+  src/Usuario/PC/2. CPU/2. Etapas/etapas.vhd
+  src/Usuario/PC/2. CPU/2. Etapas/2. Decode/decode.vhd
+  src/Usuario/PC/2. CPU/2. Etapas/3. Execute/execute.vhd           multiplexor de la ALU
+  src/Usuario/PC/2. CPU/3. Pipeline_Registros/pipeline_registros.vhd
+  src/Usuario/PC/2. CPU/4. Atascos/atascos.vhd
+  src/Usuario/PC/2. CPU/4. Atascos/2. Datos/raw_waw_detector.vhd
+Correccion del bug del doble atasco RAW (2):
+  src/Usuario/PC/2. CPU/2. Etapas/1. Fetch/fetch.vhd
+  src/Usuario/PC/2. CPU/1. UI/1. Maquina de Estados/states_machine.vhd
+  (en el disco de Active-HDL la carpeta puede figurar como "1. M#U00e1quina de Estados")
+
+Programas (3), en src/Assembler/
+  fwd_suma.asm         suma de un vector, load -> ALU consecutivos      SUMA = 30
+  fwd_suma_reord.asm   la misma suma con una instruccion en el medio    SUMA = 30
+  fwd_prodesc.asm      producto escalar, dos loads -> dmul              PROD = 46
+
+Uso
+---
+En src/Usuario/usuario.vhd elegir ProgName, Pipelining y Forwarding
+(por defecto: "fwd_suma.asm", true, true), compilar todo y simular usuario.
+Con Forwarding = true la consola muestra un mensaje
+"Adelantamiento (MEM/WB -> EX): ..." por cada dato adelantado.
+
+Tiempos esperados de fin de ejecucion (ns):
+                    sin cauce   cauce   cauce + adelantamiento
+  fwd_suma            15200      6600          6100
+  fwd_suma_reord      15200      6100          5600
+  fwd_prodesc         16700      7100          6700
+
+Todos los archivos estan en Latin-1 con fin de linea CRLF, como el original.

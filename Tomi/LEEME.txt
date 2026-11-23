@@ -1,0 +1,94 @@
+TP10 - Procesador TDA 1819 - Escenario 4c: adelantamiento load -> ALU
+Taller de Arquitectura 2026 - Grupo 11
+======================================================================
+
+Integrantes
+-----------
+  03846/1  Burgueño, Martín Andrés
+  03861/9  Dufur, Lázaro
+  01592/9  Graziani, Tomas Fermin Pablo
+  03209/5  Jauregui Lorda, Valeria
+  02224/9  Pernalete Perez, Jose Miguel
+  03923/6  Shimizu, Agustín
+
+Entrega: viernes 27 de noviembre de 2026, 11:59:59, por mensajería de IDEAS.
+
+
+Qué hay en cada carpeta
+-----------------------
+1_Informe/
+    Informe_TP10_Grupo11.docx   El informe en Word (punto 4a de la consigna).
+    Informe_TP10_Grupo11.pdf    El mismo informe en PDF, por si piden ese formato.
+
+2_Presentacion/
+    Presentacion_TP10_Grupo11.pptx   Las 16 diapositivas para la defensa (punto 4d),
+                                     con las notas del orador de cada una.
+    Presentacion_TP10_Grupo11.pdf    La misma presentación en PDF.
+    En el .pptx cada diapositiva es una imagen: se ve igual en cualquier
+    computadora, pero el texto no se puede editar ahí. Para cambiar algo, hay que
+    editar la versión en línea (link al final) y volver a exportarla.
+
+3_Archivos_para_entregar/
+    src/        Los 12 .vhd modificados y los 3 programas .asm (puntos 4b y 4c),
+                cada uno en la misma ruta que tiene dentro de TDA_1819/src/.
+    extras/     bug_doble_raw.asm: prueba mínima del bug corregido en fetch.vhd.
+    LEEME_entrega.txt   Lista de archivos y tiempos esperados.
+
+4_Proyecto_para_Active-HDL/
+    TDA_1819_TP10_proyecto_completo.zip
+                El proyecto entero con el TP10 ya aplicado, para probarlo en una
+                computadora que no tenga el proyecto. No hace falta entregarlo.
+
+
+Qué se entrega por IDEAS
+------------------------
+  - El informe (1_Informe).
+  - La presentación (2_Presentacion).
+  - Los archivos de 3_Archivos_para_entregar (los .vhd y los .asm).
+
+
+Cómo probarlo en Active-HDL
+---------------------------
+1. Descomprimir 4_Proyecto_para_Active-HDL/TDA_1819_TP10_proyecto_completo.zip
+   en C:\Aldec, de forma que quede C:\Aldec\My_Designs\TDA_1819\TDA_1819.aws
+2. Abrir ese .aws con File > Open Workspace/Design y hacer Design > Compile All.
+   Tiene que terminar en "Compile success 0 Errors 0 Warnings".
+3. Elegir el programa y la configuración en src/Usuario/usuario.vhd, líneas 48 a 50
+   (ProgName, Pipelining y Forwarding). Por defecto: "fwd_suma.asm", true, true.
+4. En la consola de Active-HDL, de a un comando:
+     acom -O3 -e 100 -work tda_1819 -2002 $dsn/src/Usuario/usuario.vhd
+     asim -t ns -O5 +access +r +m+usuario usuario USUARIO_ARCHITECTURE
+     run
+     endsim
+
+Tiempos esperados (fin de la ejecución, en ns), verificados en Active-HDL 17:
+
+  Programa            Ensamblado  Sin cauce  Cauce  Cauce + adelant.  Resultado (R4)
+  fwd_suma.asm        127         15200      6600   6100 (5 adelant.) 1E = 30
+  fwd_suma_reord.asm  127         15200      6100   5600 (5 adelant.) 1E = 30
+  fwd_prodesc.asm     157         16700      7100   6700 (4 adelant.) 2E = 46
+  bug_doble_raw.asm   71          -          1300   -                 9
+
+
+Exposición (15 minutos)
+-----------------------
+Unos 12 minutos y medio de exposición y 1 minuto y medio de margen.
+
+  Orador  Diapositivas                              Tiempo
+  1       1 a 3: portada, consigna, problema        1:55
+  2       4 a 6: idea, piezas, condiciones          2:10
+  3       7 y 8: ciclo a ciclo, regla               1:50
+  4       9 a 11: programas, tiempos, consola       2:25
+  5       12 y 13: forma de onda, bug               2:15
+  6       14 a 16: verificación, entrega, cierre    2:00
+
+Las diapositivas 7 y 12 son las más técnicas. La nota de la 14 es la más larga:
+si en el ensayo se pasan de tiempo, recortar ahí. No conviene hacer la demo en vivo
+dentro de los 15 minutos: tener Active-HDL abierto con fwd_suma listo por si lo
+piden en las preguntas.
+
+
+Versiones en línea
+------------------
+  Informe:       https://claude.ai/artifact/C7B6tWgoQR2hR4QHTRbcNV
+  Presentación:  https://claude.ai/artifact/3qkkqwf9dcGw8GRpprRpKj
