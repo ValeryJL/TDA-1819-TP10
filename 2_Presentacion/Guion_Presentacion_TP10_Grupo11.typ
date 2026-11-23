@@ -1,13 +1,13 @@
 // Guion de Presentación — TP10 Grupo 11
 // División de filminas, tiempos y guion oral para los 6 integrantes
 
-// === COMPLETAR NOMBRES CUANDO CADA INTEGRANTE ELIJA SU BLOQUE ===
-#let orador1 = "Orador 1"
-#let orador2 = "Orador 2"
-#let orador3 = "Orador 3"
-#let orador4 = "Orador 4"
-#let orador5 = "Orador 5"
-#let orador6 = "Orador 6"
+// === INTEGRANTES POR BLOQUE ===
+#let orador1 = "Lázaro"
+#let orador2 = "Agustín"
+#let orador3 = "Tomi"
+#let orador4 = "Martín"
+#let orador5 = "Valeria"
+#let orador6 = "Jose"
 
 #let ink = rgb("#1F2937")
 #let muted = rgb("#64748B")
